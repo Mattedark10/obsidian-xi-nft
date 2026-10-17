@@ -1,20 +1,18 @@
 from PIL import Image, ImageDraw, ImageFont
 import json
 import os
+import requests
+from io import BytesIO
 
-
-# ============================================================
-# OBSIDIAN XI NFT GENERATOR
-# ============================================================
 
 TEMPLATES_DIR = "templates"
 PLAYERS_FILE = "players.json"
 OUTPUT_DIR = "output"
 
 
-# ------------------------------------------------------------
+# ============================================================
 # RARITY
-# ------------------------------------------------------------
+# ============================================================
 
 def get_rarity(rating):
     rating = int(rating)
@@ -31,11 +29,12 @@ def get_rarity(rating):
         return "common"
 
 
-# ------------------------------------------------------------
+# ============================================================
 # FONT
-# ------------------------------------------------------------
+# ============================================================
 
 def load_font(size, bold=False):
+
     fonts = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         if bold
@@ -53,12 +52,144 @@ def load_font(size, bold=False):
     return ImageFont.load_default()
 
 
-# ------------------------------------------------------------
-# CENTER TEXT
-# ------------------------------------------------------------
+# ============================================================
+# FIND PLAYER ON ESPN
+# ============================================================
 
-def draw_centered_text(draw, text, y, font, width, fill="white"):
-    bbox = draw.textbbox((0, 0), text, font=font)
+def find_player_image(name):
+
+    print(f"  Searching photo for: {name}")
+
+    try:
+
+        url = "https://site.web.api.espn.com/apis/search/v2"
+
+        response = requests.get(
+            url,
+            params={
+                "query": name,
+                "limit": 10,
+                "sport": "soccer"
+            },
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout=20
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        results = data.get("results", [])
+
+        normalized_name = name.lower().strip()
+
+        for result in results:
+
+            contents = result.get("contents", [])
+
+            for item in contents:
+
+                title = str(
+                    item.get("title", "")
+                ).lower().strip()
+
+                if normalized_name in title or title in normalized_name:
+
+                    athlete = item.get("athlete", {})
+
+                    player_id = athlete.get("id")
+
+                    if player_id:
+
+                        image_url = (
+                            "https://a.espncdn.com/"
+                            f"i/headshots/soccer/players/full/"
+                            f"{player_id}.png"
+                        )
+
+                        print(
+                            f"  Found ESPN ID: {player_id}"
+                        )
+
+                        return image_url
+
+        print("  Player not found on ESPN.")
+
+    except Exception as e:
+
+        print(f"  ESPN search error: {e}")
+
+    return None
+
+
+# ============================================================
+# DOWNLOAD PLAYER IMAGE
+# ============================================================
+
+def download_player_image(url):
+
+    if not url:
+        return None
+
+    try:
+
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout=20
+        )
+
+        response.raise_for_status()
+
+        return Image.open(
+            BytesIO(response.content)
+        ).convert("RGBA")
+
+    except Exception as e:
+
+        print(f"  Image download error: {e}")
+
+        return None
+
+
+# ============================================================
+# RESIZE PLAYER
+# ============================================================
+
+def fit_player_image(image, max_width, max_height):
+
+    image = image.copy()
+
+    image.thumbnail(
+        (max_width, max_height),
+        Image.Resampling.LANCZOS
+    )
+
+    return image
+
+
+# ============================================================
+# CENTERED TEXT
+# ============================================================
+
+def draw_centered_text(
+    draw,
+    text,
+    y,
+    font,
+    width,
+    fill="white"
+):
+
+    bbox = draw.textbbox(
+        (0, 0),
+        text,
+        font=font
+    )
 
     text_width = bbox[2] - bbox[0]
 
@@ -72,15 +203,23 @@ def draw_centered_text(draw, text, y, font, width, fill="white"):
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # GENERATE CARD
-# ------------------------------------------------------------
+# ============================================================
 
 def generate_card(player):
 
-    name = str(player.get("name", "Unknown"))
-    rating = int(player.get("rating", 0))
-    position = str(player.get("position", ""))
+    name = str(
+        player.get("name", "Unknown")
+    )
+
+    rating = int(
+        player.get("rating", 0)
+    )
+
+    position = str(
+        player.get("position", "")
+    )
 
     rarity = get_rarity(rating)
 
@@ -90,27 +229,70 @@ def generate_card(player):
     )
 
     if not os.path.exists(template_path):
+
         raise FileNotFoundError(
             f"Template not found: {template_path}"
         )
 
-    print(f"\nGenerating: {name}")
+    print()
+    print(f"Generating: {name}")
     print(f"  Rating: {rating}")
     print(f"  Rarity: {rarity.upper()}")
 
     # --------------------------------------------------------
-    # LOAD TEMPLATE
+    # TEMPLATE
     # --------------------------------------------------------
 
-    card = Image.open(template_path).convert("RGBA")
+    card = Image.open(
+        template_path
+    ).convert("RGBA")
 
     width, height = card.size
 
-    draw = ImageDraw.Draw(card)
+    # --------------------------------------------------------
+    # PLAYER PHOTO
+    # --------------------------------------------------------
+
+    image_url = find_player_image(name)
+
+    player_image = download_player_image(
+        image_url
+    )
+
+    if player_image:
+
+        player_image = fit_player_image(
+            player_image,
+            int(width * 0.60),
+            int(height * 0.48)
+        )
+
+        x = (
+            width - player_image.width
+        ) // 2
+
+        y = int(
+            height * 0.20
+        )
+
+        card.alpha_composite(
+            player_image,
+            (x, y)
+        )
+
+        print("  Player photo added.")
+
+    else:
+
+        print(
+            "  Player photo unavailable."
+        )
 
     # --------------------------------------------------------
-    # FONTS
+    # TEXT
     # --------------------------------------------------------
+
+    draw = ImageDraw.Draw(card)
 
     rating_font = load_font(
         max(24, int(width * 0.075)),
@@ -132,15 +314,7 @@ def generate_card(player):
         bold=True
     )
 
-    title_font = load_font(
-        max(14, int(width * 0.025)),
-        bold=True
-    )
-
-    # --------------------------------------------------------
-    # RATING
-    # --------------------------------------------------------
-
+    # Rating
     draw.text(
         (
             int(width * 0.12),
@@ -151,10 +325,7 @@ def generate_card(player):
         fill="white"
     )
 
-    # --------------------------------------------------------
-    # POSITION
-    # --------------------------------------------------------
-
+    # Position
     draw.text(
         (
             int(width * 0.125),
@@ -165,22 +336,7 @@ def generate_card(player):
         fill="white"
     )
 
-    # --------------------------------------------------------
-    # TITLE
-    # --------------------------------------------------------
-
-    draw_centered_text(
-        draw,
-        "OBSIDIAN XI",
-        int(height * 0.70),
-        title_font,
-        width
-    )
-
-    # --------------------------------------------------------
-    # PLAYER NAME
-    # --------------------------------------------------------
-
+    # Name
     draw_centered_text(
         draw,
         name.upper(),
@@ -189,10 +345,7 @@ def generate_card(player):
         width
     )
 
-    # --------------------------------------------------------
-    # RARITY
-    # --------------------------------------------------------
-
+    # Rarity
     draw_centered_text(
         draw,
         rarity.upper(),
@@ -205,14 +358,19 @@ def generate_card(player):
     # SAVE
     # --------------------------------------------------------
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(
+        OUTPUT_DIR,
+        exist_ok=True
+    )
 
     safe_name = "".join(
         c if c.isalnum() or c in "-_" else "_"
         for c in name
     )
 
-    player_id = str(player.get("id", "unknown"))
+    player_id = str(
+        player.get("id", "unknown")
+    )
 
     output_path = os.path.join(
         OUTPUT_DIR,
@@ -224,12 +382,14 @@ def generate_card(player):
         "PNG"
     )
 
-    print(f"  Saved: {output_path}")
+    print(
+        f"  Saved: {output_path}"
+    )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # MAIN
-# ------------------------------------------------------------
+# ============================================================
 
 def main():
 
@@ -237,28 +397,28 @@ def main():
     print("              OBSIDIAN XI NFT GENERATOR")
     print("=" * 60)
 
-    if not os.path.exists(PLAYERS_FILE):
-        raise FileNotFoundError(
-            f"{PLAYERS_FILE} not found"
-        )
-
     with open(
         PLAYERS_FILE,
         "r",
         encoding="utf-8"
     ) as f:
+
         players = json.load(f)
 
     if not isinstance(players, list):
+
         raise ValueError(
             "players.json must contain an array"
         )
 
-    print(f"\nPlayers found: {len(players)}")
+    print(
+        f"\nPlayers found: {len(players)}"
+    )
 
     for player in players:
 
         try:
+
             generate_card(player)
 
         except Exception as e:
@@ -270,7 +430,8 @@ def main():
 
             print(e)
 
-    print("\n" + "=" * 60)
+    print()
+    print("=" * 60)
     print("Generation completed.")
     print("=" * 60)
 
