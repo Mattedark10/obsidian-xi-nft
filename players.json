@@ -1,0 +1,37 @@
+[
+  {
+    "id": 1,
+    "name": "Alex Storm",
+    "rating": 96,
+    "position": "ST",
+    "image": "alex_storm.png"
+  },
+  {
+    "id": 2,
+    "name": "Marco Vex",
+    "rating": 90,
+    "position": "CAM",
+    "image": "marco_vex.png"
+  },
+  {
+    "id": 3,
+    "name": "Kai Nova",
+    "rating": 85,
+    "position": "RW",
+    "image": "kai_nova.png"
+  },
+  {
+    "id": 4,
+    "name": "Leo Frost",
+    "rating": 79,
+    "position": "CM",
+    "image": "leo_frost.png"
+  },
+  {
+    "id": 5,
+    "name": "Noah Black",
+    "rating": 70,
+    "position": "CB",
+    "image": "noah_black.png"
+  }
+]
