@@ -3,11 +3,8 @@ import json
 import os
 import requests
 from io import BytesIO
-
-
-TEMPLATES_DIR = "templates"
-PLAYERS_FILE = "players.json"
-OUTPUT_DIR = "output"
+import re
+import unicodedata
 
 
 # ============================================================
@@ -15,37 +12,29 @@ OUTPUT_DIR = "output"
 # ============================================================
 
 def get_rarity(rating):
-    rating = int(rating)
-
     if rating >= 96:
-        return "mythic"
+        return "MYTHIC"
     elif rating >= 90:
-        return "legendary"
+        return "LEGENDARY"
     elif rating >= 85:
-        return "epic"
+        return "EPIC"
     elif rating >= 79:
-        return "rare"
+        return "RARE"
     else:
-        return "common"
+        return "COMMON"
 
 
 # ============================================================
 # FONT
 # ============================================================
 
-def load_font(size, bold=False):
-
-    fonts = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-
+def load_font(size):
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
     ]
 
-    for path in fonts:
+    for path in font_paths:
         if os.path.exists(path):
             return ImageFont.truetype(path, size)
 
@@ -53,73 +42,161 @@ def load_font(size, bold=False):
 
 
 # ============================================================
-# FIND PLAYER ON ESPN
+# NORMALIZE TEXT
+# ============================================================
+
+def normalize_text(text):
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9 ]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+# ============================================================
+# FIND PLAYER IMAGE - WIKIPEDIA
 # ============================================================
 
 def find_player_image(name):
 
     print(f"  Searching photo for: {name}")
 
+    headers = {
+        "User-Agent": "ObsidianXI-NFT/1.0"
+    }
+
+    api_url = "https://en.wikipedia.org/w/api.php"
+
+    # --------------------------------------------------------
+    # 1. Try exact Wikipedia title
+    # --------------------------------------------------------
+
+    params = {
+        "action": "query",
+        "format": "json",
+        "formatversion": "2",
+        "prop": "pageimages",
+        "piprop": "thumbnail",
+        "pithumbsize": "800",
+        "redirects": "1",
+        "titles": name
+    }
+
     try:
-
-        url = "https://site.web.api.espn.com/apis/search/v2"
-
         response = requests.get(
-            url,
-            params={
-                "query": name,
-                "limit": 10,
-                "sport": "soccer"
-            },
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
-            timeout=20
+            api_url,
+            params=params,
+            headers=headers,
+            timeout=15
         )
 
         response.raise_for_status()
 
         data = response.json()
 
-        results = data.get("results", [])
+        pages = data.get("query", {}).get("pages", [])
 
-        normalized_name = name.lower().strip()
+        for page in pages:
+
+            if page.get("thumbnail", {}).get("source"):
+                image_url = page["thumbnail"]["source"]
+
+                print(f"  Found Wikipedia photo: {image_url}")
+
+                return image_url
+
+    except Exception as e:
+        print(f"  Wikipedia direct search error: {e}")
+
+
+    # --------------------------------------------------------
+    # 2. Search Wikipedia
+    # --------------------------------------------------------
+
+    search_params = {
+        "action": "query",
+        "format": "json",
+        "formatversion": "2",
+        "list": "search",
+        "srsearch": name,
+        "srlimit": 10
+    }
+
+    try:
+
+        response = requests.get(
+            api_url,
+            params=search_params,
+            headers=headers,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        results = data.get("query", {}).get("search", [])
+
+        target = normalize_text(name)
 
         for result in results:
 
-            contents = result.get("contents", [])
+            title = result.get("title", "")
+            normalized_title = normalize_text(title)
 
-            for item in contents:
+            # Prefer a very close title match
+            if (
+                normalized_title == target
+                or target in normalized_title
+                or normalized_title in target
+            ):
 
-                title = str(
-                    item.get("title", "")
-                ).lower().strip()
+                page_title = title
 
-                if normalized_name in title or title in normalized_name:
+                image_params = {
+                    "action": "query",
+                    "format": "json",
+                    "formatversion": "2",
+                    "prop": "pageimages",
+                    "piprop": "thumbnail",
+                    "pithumbsize": 800,
+                    "redirects": "1",
+                    "titles": page_title
+                }
 
-                    athlete = item.get("athlete", {})
+                image_response = requests.get(
+                    api_url,
+                    params=image_params,
+                    headers=headers,
+                    timeout=15
+                )
 
-                    player_id = athlete.get("id")
+                image_response.raise_for_status()
 
-                    if player_id:
+                image_data = image_response.json()
 
-                        image_url = (
-                            "https://a.espncdn.com/"
-                            f"i/headshots/soccer/players/full/"
-                            f"{player_id}.png"
-                        )
+                image_pages = image_data.get(
+                    "query", {}
+                ).get("pages", [])
+
+                for page in image_pages:
+
+                    if page.get("thumbnail", {}).get("source"):
+
+                        image_url = page["thumbnail"]["source"]
 
                         print(
-                            f"  Found ESPN ID: {player_id}"
+                            f"  Found Wikipedia photo: {image_url}"
                         )
 
                         return image_url
 
-        print("  Player not found on ESPN.")
-
     except Exception as e:
+        print(f"  Wikipedia search error: {e}")
 
-        print(f"  ESPN search error: {e}")
+
+    print("  Player not found on Wikipedia.")
 
     return None
 
@@ -135,34 +212,41 @@ def download_player_image(url):
 
     try:
 
+        headers = {
+            "User-Agent": "ObsidianXI-NFT/1.0"
+        }
+
         response = requests.get(
             url,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
+            headers=headers,
             timeout=20
         )
 
         response.raise_for_status()
 
-        return Image.open(
+        image = Image.open(
             BytesIO(response.content)
         ).convert("RGBA")
 
+        return image
+
     except Exception as e:
 
-        print(f"  Image download error: {e}")
+        print(
+            f"  Error downloading player photo: {e}"
+        )
 
         return None
 
 
 # ============================================================
-# RESIZE PLAYER
+# FIT PLAYER IMAGE
 # ============================================================
 
 def fit_player_image(image, max_width, max_height):
 
-    image = image.copy()
+    if image is None:
+        return None
 
     image.thumbnail(
         (max_width, max_height),
@@ -173,7 +257,7 @@ def fit_player_image(image, max_width, max_height):
 
 
 # ============================================================
-# CENTERED TEXT
+# CENTER TEXT
 # ============================================================
 
 def draw_centered_text(
@@ -181,8 +265,7 @@ def draw_centered_text(
     text,
     y,
     font,
-    width,
-    fill="white"
+    fill
 ):
 
     bbox = draw.textbbox(
@@ -191,9 +274,9 @@ def draw_centered_text(
         font=font
     )
 
-    text_width = bbox[2] - bbox[0]
+    width = bbox[2] - bbox[0]
 
-    x = (width - text_width) // 2
+    x = (draw._image.width - width) / 2
 
     draw.text(
         (x, y),
@@ -209,45 +292,41 @@ def draw_centered_text(
 
 def generate_card(player):
 
-    name = str(
-        player.get("name", "Unknown")
-    )
-
-    rating = int(
-        player.get("rating", 0)
-    )
-
-    position = str(
-        player.get("position", "")
-    )
+    name = player["name"]
+    rating = player["rating"]
+    position = player["position"]
 
     rarity = get_rarity(rating)
-
-    template_path = os.path.join(
-        TEMPLATES_DIR,
-        f"{rarity}.jpg"
-    )
-
-    if not os.path.exists(template_path):
-
-        raise FileNotFoundError(
-            f"Template not found: {template_path}"
-        )
 
     print()
     print(f"Generating: {name}")
     print(f"  Rating: {rating}")
-    print(f"  Rarity: {rarity.upper()}")
+    print(f"  Rarity: {rarity}")
 
     # --------------------------------------------------------
     # TEMPLATE
     # --------------------------------------------------------
 
+    template_path = os.path.join(
+        "templates",
+        rarity.lower() + ".jpg"
+    )
+
+    if not os.path.exists(template_path):
+
+        print(
+            f"  ERROR: Template not found: {template_path}"
+        )
+
+        return
+
     card = Image.open(
         template_path
     ).convert("RGBA")
 
-    width, height = card.size
+    card_width, card_height = card.size
+
+    draw = ImageDraw.Draw(card)
 
     # --------------------------------------------------------
     # PLAYER PHOTO
@@ -261,26 +340,33 @@ def generate_card(player):
 
     if player_image:
 
+        # Maximum area for player photo
+        max_width = int(card_width * 0.65)
+        max_height = int(card_height * 0.48)
+
         player_image = fit_player_image(
             player_image,
-            int(width * 0.60),
-            int(height * 0.48)
+            max_width,
+            max_height
         )
 
-        x = (
-            width - player_image.width
-        ) // 2
+        if player_image:
 
-        y = int(
-            height * 0.20
-        )
+            x = (
+                card_width
+                - player_image.width
+            ) // 2
 
-        card.alpha_composite(
-            player_image,
-            (x, y)
-        )
+            y = int(
+                card_height * 0.17
+            )
 
-        print("  Player photo added.")
+            card.alpha_composite(
+                player_image,
+                (x, y)
+            )
+
+            print("  Player photo added.")
 
     else:
 
@@ -292,66 +378,58 @@ def generate_card(player):
     # TEXT
     # --------------------------------------------------------
 
-    draw = ImageDraw.Draw(card)
-
     rating_font = load_font(
-        max(24, int(width * 0.075)),
-        bold=True
+        max(30, int(card_width * 0.08))
     )
 
     position_font = load_font(
-        max(18, int(width * 0.045)),
-        bold=True
+        max(20, int(card_width * 0.045))
     )
 
     name_font = load_font(
-        max(18, int(width * 0.045)),
-        bold=True
+        max(22, int(card_width * 0.055))
     )
 
     rarity_font = load_font(
-        max(14, int(width * 0.032)),
-        bold=True
+        max(16, int(card_width * 0.035))
     )
 
+    text_color = (255, 255, 255, 255)
+
     # Rating
-    draw.text(
-        (
-            int(width * 0.12),
-            int(height * 0.105)
-        ),
+    draw_centered_text(
+        draw,
         str(rating),
-        font=rating_font,
-        fill="white"
+        int(card_height * 0.07),
+        rating_font,
+        text_color
     )
 
     # Position
-    draw.text(
-        (
-            int(width * 0.125),
-            int(height * 0.185)
-        ),
+    draw_centered_text(
+        draw,
         position,
-        font=position_font,
-        fill="white"
+        int(card_height * 0.14),
+        position_font,
+        text_color
     )
 
-    # Name
+    # Player name
     draw_centered_text(
         draw,
         name.upper(),
-        int(height * 0.76),
+        int(card_height * 0.73),
         name_font,
-        width
+        text_color
     )
 
     # Rarity
     draw_centered_text(
         draw,
-        rarity.upper(),
-        int(height * 0.83),
+        rarity,
+        int(card_height * 0.79),
         rarity_font,
-        width
+        text_color
     )
 
     # --------------------------------------------------------
@@ -359,22 +437,19 @@ def generate_card(player):
     # --------------------------------------------------------
 
     os.makedirs(
-        OUTPUT_DIR,
+        "output",
         exist_ok=True
     )
 
-    safe_name = "".join(
-        c if c.isalnum() or c in "-_" else "_"
-        for c in name
-    )
-
-    player_id = str(
-        player.get("id", "unknown")
+    safe_name = re.sub(
+        r"[^A-Za-z0-9_-]",
+        "_",
+        name
     )
 
     output_path = os.path.join(
-        OUTPUT_DIR,
-        f"{player_id}_{safe_name}.png"
+        "output",
+        f"{player['id']}_{safe_name}.png"
     )
 
     card.convert("RGB").save(
@@ -394,41 +469,20 @@ def generate_card(player):
 def main():
 
     print("=" * 60)
-    print("              OBSIDIAN XI NFT GENERATOR")
+    print("OBSIDIAN XI NFT GENERATOR")
     print("=" * 60)
 
     with open(
-        PLAYERS_FILE,
+        "players.json",
         "r",
         encoding="utf-8"
     ) as f:
 
         players = json.load(f)
 
-    if not isinstance(players, list):
-
-        raise ValueError(
-            "players.json must contain an array"
-        )
-
-    print(
-        f"\nPlayers found: {len(players)}"
-    )
-
     for player in players:
 
-        try:
-
-            generate_card(player)
-
-        except Exception as e:
-
-            print(
-                f"\nERROR generating "
-                f"{player.get('name', 'UNKNOWN')}:"
-            )
-
-            print(e)
+        generate_card(player)
 
     print()
     print("=" * 60)
