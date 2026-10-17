@@ -1,8 +1,6 @@
 from PIL import Image, ImageDraw, ImageFont
 import json
 import os
-import urllib.request
-from io import BytesIO
 
 
 # ============================================================
@@ -38,73 +36,33 @@ def get_rarity(rating):
 # ------------------------------------------------------------
 
 def load_font(size, bold=False):
-    possible_fonts = [
+    fonts = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         if bold
         else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
         if bold
-        else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
     ]
 
-    for font_path in possible_fonts:
-        if os.path.exists(font_path):
-            return ImageFont.truetype(font_path, size)
+    for path in fonts:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
 
     return ImageFont.load_default()
 
 
 # ------------------------------------------------------------
-# PLAYER IMAGE
+# CENTER TEXT
 # ------------------------------------------------------------
 
-def load_player_image(url):
-    try:
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            }
-        )
-
-        with urllib.request.urlopen(request, timeout=20) as response:
-            data = response.read()
-
-        return Image.open(BytesIO(data)).convert("RGBA")
-
-    except Exception as e:
-        print(f"  Image error: {e}")
-        return None
-
-
-# ------------------------------------------------------------
-# FIT IMAGE
-# ------------------------------------------------------------
-
-def fit_image(image, size):
-    image = image.copy()
-    image.thumbnail(size, Image.Resampling.LANCZOS)
-
-    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
-
-    x = (size[0] - image.width) // 2
-    y = (size[1] - image.height) // 2
-
-    canvas.alpha_composite(image, (x, y))
-
-    return canvas
-
-
-# ------------------------------------------------------------
-# CENTERED TEXT
-# ------------------------------------------------------------
-
-def draw_centered_text(draw, text, y, font, canvas_width, fill="white"):
+def draw_centered_text(draw, text, y, font, width, fill="white"):
     bbox = draw.textbbox((0, 0), text, font=font)
+
     text_width = bbox[2] - bbox[0]
 
-    x = (canvas_width - text_width) // 2
+    x = (width - text_width) // 2
 
     draw.text(
         (x, y),
@@ -120,10 +78,9 @@ def draw_centered_text(draw, text, y, font, canvas_width, fill="white"):
 
 def generate_card(player):
 
-    name = str(player["name"])
-    rating = int(player["rating"])
-    position = str(player["position"])
-    image_url = str(player["image"])
+    name = str(player.get("name", "Unknown"))
+    rating = int(player.get("rating", 0))
+    position = str(player.get("position", ""))
 
     rarity = get_rarity(rating)
 
@@ -142,44 +99,18 @@ def generate_card(player):
     print(f"  Rarity: {rarity.upper()}")
 
     # --------------------------------------------------------
-    # TEMPLATE
+    # LOAD TEMPLATE
     # --------------------------------------------------------
 
     card = Image.open(template_path).convert("RGBA")
 
     width, height = card.size
 
-    # --------------------------------------------------------
-    # PLAYER IMAGE
-    # --------------------------------------------------------
-
-    player_image = load_player_image(image_url)
-
-    if player_image:
-
-        # Approximate player-image area.
-        # This can be adjusted once we see the actual templates.
-        image_width = int(width * 0.62)
-        image_height = int(height * 0.48)
-
-        fitted = fit_image(
-            player_image,
-            (image_width, image_height)
-        )
-
-        image_x = (width - image_width) // 2
-        image_y = int(height * 0.22)
-
-        card.alpha_composite(
-            fitted,
-            (image_x, image_y)
-        )
-
-    # --------------------------------------------------------
-    # TEXT
-    # --------------------------------------------------------
-
     draw = ImageDraw.Draw(card)
+
+    # --------------------------------------------------------
+    # FONTS
+    # --------------------------------------------------------
 
     rating_font = load_font(
         max(24, int(width * 0.075)),
@@ -235,7 +166,7 @@ def generate_card(player):
     )
 
     # --------------------------------------------------------
-    # OBSIDIAN XI
+    # TITLE
     # --------------------------------------------------------
 
     draw_centered_text(
@@ -281,9 +212,11 @@ def generate_card(player):
         for c in name
     )
 
+    player_id = str(player.get("id", "unknown"))
+
     output_path = os.path.join(
         OUTPUT_DIR,
-        f"{player['id']}_{safe_name}.png"
+        f"{player_id}_{safe_name}.png"
     )
 
     card.convert("RGB").save(
@@ -329,10 +262,12 @@ def main():
             generate_card(player)
 
         except Exception as e:
+
             print(
                 f"\nERROR generating "
                 f"{player.get('name', 'UNKNOWN')}:"
             )
+
             print(e)
 
     print("\n" + "=" * 60)
